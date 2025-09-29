@@ -4,8 +4,7 @@ import { Graphics } from '@pixi/graphics';
 import { Text, TextStyle } from '@pixi/text';
 import { DropShadowFilter } from '@pixi/filter-drop-shadow';
 import * as d3 from 'd3';
-import { subscribe, getState, setState } from './store';
-import { prependOlderCandles, fetchInProgress } from './candlestickData';
+import { subscribe, getState } from './store';
 import type { QuoteCandle } from '../api/historicalQuotes';
 
 // Crosshair state (module scope)
@@ -31,12 +30,7 @@ const margin = { left: 20, right: 70, top: 20, bottom: 50 };
 
 // Exported function to initialize the chart
 export function initChart(container: HTMLElement) {
-  // For zoom out speed/duration tracking
-  let lastZoomTime = Date.now();
-  let lastWindowSize = 50;
   let app: Application | null = null;
-  let drawing = false;
-  let startPoint: [number, number] | null = null;
 
   // Make chart full screen
   // Prevent page scroll and overflow
@@ -77,7 +71,7 @@ export function initChart(container: HTMLElement) {
   // Zoom and pan state
   let windowStart = 0; // float, 0 = leftmost candle
   let windowSize = 50; // number of candles visible
-  let centered = false;
+  let lastDataRef: QuoteCandle[] | null = null;
   let isPanning = false;
   let panStartX = 0;
   let panStartWindow = 0;
@@ -85,9 +79,9 @@ export function initChart(container: HTMLElement) {
   function triggerRender() {
     const state = getState();
     const data = state.data || [];
-    if (!centered && windowSize > 0 && data.length > windowSize) {
-      windowStart = Math.max(0, (data.length - windowSize) / 2);
-      centered = true;
+    if (state.data !== lastDataRef) {
+      lastDataRef = state.data;
+      windowStart = Math.max(0, data.length - windowSize);
     }
     renderChart(state, windowStart, windowSize, app);
   }
@@ -102,9 +96,12 @@ export function initChart(container: HTMLElement) {
     const data = state.data;
     if (!data.length) return;
     const rect = (app.view as HTMLCanvasElement).getBoundingClientRect();
+    const chartWidth = Math.max(1, rect.width - margin.left - margin.right);
     const mouseX = e.clientX - rect.left;
-    const mouseFrac =
-      (mouseX - margin.left) / (rect.width - margin.left - margin.right);
+    const mouseFrac = Math.min(
+      1,
+      Math.max(0, (mouseX - margin.left) / chartWidth),
+    );
     const oldSize = windowSize;
     const minSize = Math.min(10, data.length);
     const maxSize = data.length;
@@ -112,54 +109,29 @@ export function initChart(container: HTMLElement) {
       minSize,
       Math.min(maxSize, windowSize * (e.deltaY > 0 ? 1.1 : 0.9)),
     );
-    // Track the candle index under the mouse before zoom
     const candleIdxUnderMouse = windowStart + mouseFrac * oldSize;
     windowStart += (oldSize - windowSize) * mouseFrac;
-    // Only fetch if the leftmost visible candle is missing and not already at the earliest candle
-    const missingLeft = windowStart < 0 ? Math.abs(Math.floor(windowStart)) : 0;
-    const stateData = getState().data;
-    const earliestCandle = stateData[0];
-    const earliestYear = earliestCandle
-      ? new Date(earliestCandle.ts).getFullYear()
-      : null;
-    const atEarliest = earliestYear !== null && earliestYear <= 2018;
-    // Calculate zoom out speed and duration
-    const now = Date.now();
-    let zoomSpeed = 1;
-    if (windowSize > lastWindowSize) {
-      // Only consider zooming out
-      const sizeDelta = windowSize - lastWindowSize;
-      const timeDelta = Math.max(1, now - lastZoomTime);
-      zoomSpeed = sizeDelta / timeDelta; // candles per ms
+    const maxStart = Math.max(0, data.length - windowSize);
+    if (!Number.isFinite(windowStart)) {
+      windowStart = 0;
     }
-    lastZoomTime = now;
-    lastWindowSize = windowSize;
-    // Use a multiplier based on zoomSpeed (slow = 1.5, fast = up to 10)
-    const multiplier = Math.min(10, 1.5 + zoomSpeed * 2000); // tune factor as needed
-    if (missingLeft > 0 && !atEarliest && !fetchInProgress && windowStart < 0) {
-      const moveRatio = windowSize > 0 ? missingLeft / windowSize : 1;
-      const fetchCount = Math.max(1, Math.floor(moveRatio * windowSize));
-      const cappedFetch = Math.min(fetchCount, missingLeft);
-      prependOlderCandles(cappedFetch, multiplier).then(() => {
-        // After data is prepended, adjust windowStart so the same candle stays under the cursor
-        const newData = getState().data;
-        const added = newData.length - data.length;
-        // The candle that was under the mouse is now at index candleIdxUnderMouse + added
-        windowStart = candleIdxUnderMouse + added - mouseFrac * windowSize;
-        // Do NOT clamp windowStart; allow negative for infinite canvas
-        triggerRender();
-      });
-    } else {
-      // Do NOT clamp windowStart; allow negative for infinite canvas
-      triggerRender();
+    windowStart = Math.max(0, Math.min(windowStart, maxStart));
+    if (Number.isFinite(candleIdxUnderMouse)) {
+      const clampedIdx = Math.max(
+        0,
+        Math.min(data.length - 1, candleIdxUnderMouse),
+      );
+      const targetStart = clampedIdx - mouseFrac * windowSize;
+      windowStart = Math.max(0, Math.min(targetStart, maxStart));
     }
+    triggerRender();
   });
 
   // Mouse drag for pan
   (app.view as HTMLCanvasElement).addEventListener('mousedown', event => {
     if (
       (event as MouseEvent).button === 1 ||
-      ((event as MouseEvent).button === 0 && getState().tool === 'none')
+      (event as MouseEvent).button === 0
     ) {
       isPanning = true;
       panStartX = (event as MouseEvent).clientX;
@@ -173,81 +145,20 @@ export function initChart(container: HTMLElement) {
       const data = state.data;
       if (!data.length) return;
       const dx = (event as MouseEvent).clientX - panStartX;
-      const chartWidth =
-        (app.view as HTMLCanvasElement).width - margin.left - margin.right;
-      const pxPerCandle = chartWidth / windowSize;
+      const chartWidth = Math.max(
+        1,
+        (app.view as HTMLCanvasElement).width - margin.left - margin.right,
+      );
+      const pxPerCandle = chartWidth / Math.max(1, windowSize);
       const newWindowStart = panStartWindow - dx / pxPerCandle;
-      // Only allow infinite pan left while data is still being fetched and not at earliest candle
-      const missingLeft =
-        newWindowStart < 0 ? Math.abs(Math.floor(newWindowStart)) : 0;
-      // Find earliest candle timestamp (assume sorted ascending)
-      const earliestCandle = data[0];
-      const earliestYear = earliestCandle
-        ? new Date(earliestCandle.ts).getFullYear()
-        : null;
-      const atEarliest = earliestYear !== null && earliestYear <= 2018;
-      // Always allow infinite pan left/right, even if data is missing
-      windowStart = newWindowStart;
-      if (
-        missingLeft > 0 &&
-        !fetchInProgress &&
-        !atEarliest &&
-        newWindowStart < 0
-      ) {
-        // Fetch proportional to how much user moved left relative to visible range
-        const moveRatio = windowSize > 0 ? missingLeft / windowSize : 1;
-        // Fetch at least 1 day, at most missingLeft
-        const fetchCount = Math.max(1, Math.floor(moveRatio * windowSize));
-        const cappedFetch = Math.min(fetchCount, missingLeft);
-        prependOlderCandles(cappedFetch).then(() => {
-          // Do NOT clamp windowStart; allow negative for infinite canvas
-          triggerRender();
-        });
-      } else {
-        // Do NOT clamp windowStart; allow negative for infinite canvas
-        triggerRender();
-      }
+      const maxStart = Math.max(0, data.length - windowSize);
+      windowStart = Math.max(0, Math.min(newWindowStart, maxStart));
+      triggerRender();
     }
   });
   window.addEventListener('mouseup', () => {
     isPanning = false;
     (app.view as HTMLCanvasElement).style.cursor = '';
-  });
-
-  // Mouse event handlers for drawing tools
-  (app.view as HTMLCanvasElement).addEventListener('mousedown', event => {
-    const e = event as MouseEvent;
-    const state = getState();
-    if (state.tool === 'trendline' || state.tool === 'hline') {
-      const rect = (app.view as HTMLCanvasElement).getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      if (state.tool === 'trendline') {
-        if (!drawing) {
-          startPoint = [x, y];
-          drawing = true;
-          setState({ drawing: { type: 'trendline', points: [[x, y]] } });
-        } else {
-          // Finish trendline
-          setState({
-            shapes: [
-              ...state.shapes,
-              {
-                type: 'trendline',
-                points: [startPoint as [number, number], [x, y]],
-              },
-            ],
-            drawing: null,
-          });
-          drawing = false;
-          startPoint = null;
-        }
-      } else if (state.tool === 'hline') {
-        setState({
-          shapes: [...state.shapes, { type: 'hline', y }],
-        });
-      }
-    }
   });
 
   (app.view as HTMLCanvasElement).addEventListener('mousemove', event => {
@@ -289,14 +200,6 @@ export function initChart(container: HTMLElement) {
     }
     // Hide crosshair on mouse up outside chart
     // crosshair.x = crosshair.y = crosshair.candleIdx = null;
-    // Removed unused variable e
-    if (state.tool === 'trendline' && drawing && startPoint) {
-      const x = mouseX;
-      const y = mouseY;
-      setState({
-        drawing: { type: 'trendline', points: [startPoint, [x, y]] },
-      });
-    }
   });
 
   return app;
@@ -492,48 +395,66 @@ function renderChart(
   ];
   app.stage.addChild(xAxisBar);
   // Draw X axis (date) labels
-  // Calculate number of X ticks based on available space (min 80px per label)
-  const xTickCount = Math.max(
-    4,
-    Math.floor((width - margin.left - margin.right) / 300),
-  );
-  // Only use valid (non-null) visibleDomain values for ticks
+  const timeframe = state.timeframe;
+  const baseSpacing =
+    timeframe === '1d'
+      ? 160
+      : timeframe === '1h'
+      ? 120
+      : timeframe === '5m'
+      ? 100
+      : 80;
   const validTicks = visibleDomain
     .map((ts, i) => (ts ? { ts, i } : null))
     .filter(
       (entry): entry is { ts: QuoteCandle['ts']; i: number } => entry !== null,
     );
-  const xTickStep = Math.max(1, Math.floor(validTicks.length / xTickCount));
-  for (let t = 0; t < validTicks.length; t += xTickStep) {
-    const { ts, i } = validTicks[t];
-    const xPos = x(i.toString());
-    if (xPos === undefined) continue;
-    // Draw grid line
+  const scaleStep =
+    typeof (x as { step?: () => number }).step === 'function'
+      ? (x as { step: () => number }).step()
+      : x.bandwidth();
+  const minLabelSpacing = Math.max(baseSpacing, scaleStep * 1.5);
+  type TickRender = { ts: QuoteCandle['ts']; i: number; centerX: number };
+  const ticksToRender: TickRender[] = [];
+  validTicks.forEach((entry, idx) => {
+    const xPos = x(entry.i.toString());
+    if (xPos === undefined) return;
+    const centerX = xPos + x.bandwidth() / 2;
+    const isFirst = ticksToRender.length === 0;
+    const lastTick = ticksToRender[ticksToRender.length - 1];
+    if (isFirst || centerX - lastTick.centerX >= minLabelSpacing) {
+      ticksToRender.push({ ...entry, centerX });
+      return;
+    }
+    const isLast = idx === validTicks.length - 1;
+    if (isLast) {
+      ticksToRender[ticksToRender.length - 1] = { ...entry, centerX };
+    }
+  });
+
+  ticksToRender.forEach(({ ts, centerX }) => {
     const grid = new Graphics();
     grid
       .lineStyle({ width: 1, color: 0x22262c, alpha: 0.7 })
-      .moveTo(xPos + x.bandwidth() / 2, margin.top)
-      .lineTo(xPos + x.bandwidth() / 2, height - margin.bottom);
+      .moveTo(centerX, margin.top)
+      .lineTo(centerX, height - margin.bottom);
     app.stage.addChild(grid);
-    // Draw label
+
     const date = new Date(ts);
     let labelStr = '';
     if (data.length > 0) {
-      const tf = (state.timeframe || '').toLowerCase();
-      const isIntraday = tf.includes('min') || tf.includes('hour');
+      const tf = (timeframe || '').toLowerCase();
+      const isIntraday = tf.endsWith('m') || tf.endsWith('h');
       const multiDay = visibleCoversMultipleDays();
       if (multiDay) {
-        labelStr =
-          date.toLocaleDateString([], {
-            day: '2-digit',
-            month: '2-digit',
-            year: '2-digit',
-          }) +
-          ' ' +
-          date.toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          });
+        labelStr = `${date.toLocaleDateString([], {
+          day: '2-digit',
+          month: '2-digit',
+          year: '2-digit',
+        })} ${date.toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        })}`;
       } else if (isIntraday) {
         labelStr = date.toLocaleTimeString([], {
           hour: '2-digit',
@@ -547,6 +468,7 @@ function renderChart(
         });
       }
     }
+
     const label = new Text(
       labelStr,
       new TextStyle({
@@ -563,10 +485,10 @@ function renderChart(
       }),
     );
     label.anchor.set(0.5, 0);
-    label.x = xPos + x.bandwidth() / 2;
+    label.x = centerX;
     label.y = height - margin.bottom + 12;
     app.stage.addChild(label);
-  }
+  });
 
   // Draw candlesticks (only for visibleDomain slots with data)
   visibleDomain.forEach((ts, i) => {
@@ -617,26 +539,6 @@ function renderChart(
       right: xPos + candleWidth,
     });
   });
-  // Draw user shapes (trendlines, hlines)
-  [...(state.shapes || []), ...(state.drawing ? [state.drawing] : [])].forEach(
-    shape => {
-      if (shape.type === 'trendline' && shape.points.length === 2) {
-        const [p1, p2] = shape.points;
-        const g = new Graphics();
-        g.lineStyle({ width: 2, color: 0xffd600 });
-        g.moveTo(p1[0], p1[1]);
-        g.lineTo(p2[0], p2[1]);
-        app.stage.addChild(g);
-      } else if (shape.type === 'hline') {
-        const g = new Graphics();
-        g.lineStyle({ width: 2, color: 0x00bcd4 });
-        g.moveTo(0, shape.y);
-        g.lineTo(width, shape.y);
-        app.stage.addChild(g);
-      }
-    },
-  );
-
   // Draw crosshair last so it sits atop all geometry
   if (crosshairActive) {
     const vLine = new Graphics();

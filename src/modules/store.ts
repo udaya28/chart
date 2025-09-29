@@ -2,19 +2,12 @@
 
 import type { QuoteCandle } from '../api/historicalQuotes';
 
-export type DrawShape =
-  | { type: 'trendline'; points: [number, number][] }
-  | { type: 'hline'; y: number };
-
 export type State = {
   underlying: 'NIFTY' | 'BANKNIFTY';
   timeframe: '1m' | '5m' | '1h' | '1d';
   loading: boolean;
   error: string | null;
   data: QuoteCandle[];
-  tool: 'none' | 'trendline' | 'hline';
-  shapes: DrawShape[];
-  drawing: DrawShape | null;
 };
 
 const listeners: Array<(state: State) => void> = [];
@@ -25,9 +18,6 @@ let state: State = {
   loading: false,
   error: null,
   data: [],
-  tool: 'none',
-  shapes: [],
-  drawing: null,
 };
 
 export function getState() {

@@ -1,4 +1,4 @@
-// Simple UI controls for switching underlying, timeframe, and drawing tools
+// Simple UI controls for switching underlying and timeframe
 import { setState, getState, subscribe } from './store';
 import { loadCandlestickData } from './candlestickData';
 
@@ -15,12 +15,6 @@ export function initUI(container: HTMLElement) {
         <option value="1h">1 hour</option>
         <option value="1d">Daily</option>
       </select>
-      <select id="tool">
-        <option value="none">Select Tool</option>
-        <option value="trendline">Trendline</option>
-        <option value="hline">Horizontal Line</option>
-      </select>
-      <button id="reload">Reload</button>
       <span id="status"></span>
     </div>
   `;
@@ -28,28 +22,23 @@ export function initUI(container: HTMLElement) {
     '#underlying',
   ) as HTMLSelectElement;
   const timeframe = container.querySelector('#timeframe') as HTMLSelectElement;
-  const tool = container.querySelector('#tool') as HTMLSelectElement;
-  const reload = container.querySelector('#reload') as HTMLButtonElement;
   const status = container.querySelector('#status') as HTMLSpanElement;
 
   // Restore form state from localStorage if available
   const savedForm = localStorage.getItem('chartFormState');
   if (savedForm) {
     try {
-      const { underlying: u, timeframe: tf, tool: t } = JSON.parse(savedForm);
+      const { underlying: u, timeframe: tf } = JSON.parse(savedForm);
       if (u) underlying.value = u;
       if (tf) timeframe.value = tf;
-      if (t) tool.value = t;
       setState({
         underlying: underlying.value as 'NIFTY' | 'BANKNIFTY',
         timeframe: timeframe.value as '1m' | '5m' | '1h' | '1d',
-        tool: tool.value as 'none' | 'trendline' | 'hline',
       });
     } catch {}
   } else {
     underlying.value = getState().underlying;
     timeframe.value = getState().timeframe;
-    tool.value = getState().tool;
   }
 
   function saveFormState() {
@@ -58,7 +47,6 @@ export function initUI(container: HTMLElement) {
       JSON.stringify({
         underlying: underlying.value,
         timeframe: timeframe.value,
-        tool: tool.value,
       }),
     );
   }
@@ -72,12 +60,6 @@ export function initUI(container: HTMLElement) {
     saveFormState();
     loadCandlestickData();
   };
-  tool.onchange = () => {
-    setState({ tool: tool.value as 'none' | 'trendline' | 'hline' });
-    saveFormState();
-  };
-  reload.onclick = () => loadCandlestickData();
-
   subscribe(state => {
     if (state.loading) status.textContent = 'Loading...';
     else if (state.error) status.textContent = 'Error: ' + state.error;
