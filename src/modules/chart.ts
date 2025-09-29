@@ -2,11 +2,12 @@
 import { Application } from '@pixi/app';
 import { Graphics } from '@pixi/graphics';
 import { Text, TextStyle } from '@pixi/text';
-import { Texture } from 'pixi.js';
+import { Texture } from '@pixi/core';
 import { DropShadowFilter } from '@pixi/filter-drop-shadow';
 import * as d3 from 'd3';
 import { subscribe, getState, setState } from './store';
 import { prependOlderCandles, fetchInProgress } from './candlestickData';
+import type { QuoteCandle } from '../api/historicalQuotes';
 
 // Crosshair state (module scope)
 let crosshair = {
@@ -16,9 +17,14 @@ let crosshair = {
 };
 
 // Shared chart dimensions and margin (module scope)
-let width = window.innerWidth;
-let height = window.innerHeight;
+const width = window.innerWidth;
+const height = window.innerHeight;
 const margin = { left: 20, right: 70, top: 20, bottom: 50 };
+
+const textureFromCanvas = (
+  canvas: HTMLCanvasElement,
+): ReturnType<typeof Texture.from> =>
+  Texture.from(canvas) as unknown as Texture;
 
 // Exported function to initialize the chart
 export function initChart(container: HTMLElement) {
@@ -107,7 +113,7 @@ export function initChart(container: HTMLElement) {
     const candleIdxUnderMouse = windowStart + mouseFrac * oldSize;
     windowStart += (oldSize - windowSize) * mouseFrac;
     // Only fetch if the leftmost visible candle is missing and not already at the earliest candle
-    let missingLeft = windowStart < 0 ? Math.abs(Math.floor(windowStart)) : 0;
+    const missingLeft = windowStart < 0 ? Math.abs(Math.floor(windowStart)) : 0;
     const stateData = getState().data;
     const earliestCandle = stateData[0];
     const earliestYear = earliestCandle
@@ -115,7 +121,7 @@ export function initChart(container: HTMLElement) {
       : null;
     const atEarliest = earliestYear !== null && earliestYear <= 2018;
     // Calculate zoom out speed and duration
-    let now = Date.now();
+    const now = Date.now();
     let zoomSpeed = 1;
     if (windowSize > lastWindowSize) {
       // Only consider zooming out
@@ -126,7 +132,7 @@ export function initChart(container: HTMLElement) {
     lastZoomTime = now;
     lastWindowSize = windowSize;
     // Use a multiplier based on zoomSpeed (slow = 1.5, fast = up to 10)
-    let multiplier = Math.min(10, 1.5 + zoomSpeed * 2000); // tune factor as needed
+    const multiplier = Math.min(10, 1.5 + zoomSpeed * 2000); // tune factor as needed
     if (missingLeft > 0 && !atEarliest && !fetchInProgress && windowStart < 0) {
       const moveRatio = windowSize > 0 ? missingLeft / windowSize : 1;
       const fetchCount = Math.max(1, Math.floor(moveRatio * windowSize));
@@ -166,11 +172,10 @@ export function initChart(container: HTMLElement) {
       const dx = (event as MouseEvent).clientX - panStartX;
       const chartWidth =
         (app.view as HTMLCanvasElement).width - margin.left - margin.right;
-      const domainLen = data.length;
       const pxPerCandle = chartWidth / windowSize;
-      let newWindowStart = panStartWindow - dx / pxPerCandle;
+      const newWindowStart = panStartWindow - dx / pxPerCandle;
       // Only allow infinite pan left while data is still being fetched and not at earliest candle
-      let missingLeft =
+      const missingLeft =
         newWindowStart < 0 ? Math.abs(Math.floor(newWindowStart)) : 0;
       // Find earliest candle timestamp (assume sorted ascending)
       const earliestCandle = data[0];
@@ -268,7 +273,7 @@ export function initChart(container: HTMLElement) {
     }
     // Hide crosshair on mouse up outside chart
     // crosshair.x = crosshair.y = crosshair.candleIdx = null;
-    const e = event as MouseEvent;
+    // Removed unused variable e
     if (state.tool === 'trendline' && drawing && startPoint) {
       const x = mouseX;
       const y = mouseY;
@@ -316,7 +321,7 @@ function renderChart(
     }
     app.stage.addChild(hLine);
     // Draw OHLC box at top (like TradingView)
-    const d = state.data && state.data[crosshair.candleIdx];
+    const d = state.data?.[crosshair.candleIdx];
     if (d) {
       const ohlcStr = `O ${d.open}  H ${d.high}  L ${d.low}  C ${d.close}`;
       const ohlcText = new Text(
@@ -362,7 +367,7 @@ function renderChart(
     }
     app.stage.addChild(hLine);
     // Draw OHLC box at top (like TradingView)
-    const d = state.data && state.data[crosshair.candleIdx];
+    const d = state.data?.[crosshair.candleIdx];
     if (d) {
       const ohlcStr = `O ${d.open}  H ${d.high}  L ${d.low}  C ${d.close}`;
       const ohlcText = new Text(
@@ -429,12 +434,13 @@ function renderChart(
   const startIdx = Math.floor(windowStart);
   const endIdx = Math.ceil(windowStart + windowSize);
   // Build visibleDomain: pad with nulls for missing candles
-  const visibleDomain: (number | null)[] = [];
-  const visibleData: typeof data = [];
+  const visibleDomain: Array<QuoteCandle['ts'] | null> = [];
+  const visibleData: Array<QuoteCandle | undefined> = [];
   for (let i = startIdx; i < endIdx; ++i) {
     if (i < 0 || i >= domain.length) {
-      visibleDomain.push(null); // empty slot
-      visibleData.push(null);
+      // empty slot, mark as null and undefined for candle
+      visibleDomain.push(null);
+      visibleData.push(undefined);
     } else {
       visibleDomain.push(domain[i]);
       visibleData.push(data[i]);
@@ -442,9 +448,15 @@ function renderChart(
   }
   // Helper: check if visibleDomain covers multiple days
   function visibleCoversMultipleDays(): boolean {
-    if (visibleDomain.length < 2) return false;
-    const first = new Date(visibleDomain[0]);
-    const last = new Date(visibleDomain[visibleDomain.length - 1]);
+    const firstTs = visibleDomain.find(
+      (ts): ts is QuoteCandle['ts'] => ts !== null,
+    );
+    const lastTs = [...visibleDomain]
+      .reverse()
+      .find((ts): ts is QuoteCandle['ts'] => ts !== null);
+    if (!firstTs || !lastTs) return false;
+    const first = new Date(firstTs);
+    const last = new Date(lastTs);
     return (
       first.getFullYear() !== last.getFullYear() ||
       first.getMonth() !== last.getMonth() ||
@@ -453,13 +465,13 @@ function renderChart(
   }
   const x = d3
     .scaleBand()
-    .domain(visibleDomain.map((d, i) => i.toString()))
+    .domain(visibleDomain.map((_, i) => i.toString()))
     .range([margin.left, width - margin.right])
     .padding(0.3);
   // Y scale: price
   // Only use visible candles for y scale
   const visibleCandles = visibleData.filter(
-    (d): d is { low: number; high: number } => !!d,
+    (d): d is QuoteCandle => d !== undefined,
   );
   const y = d3
     .scaleLinear()
@@ -469,6 +481,14 @@ function renderChart(
     ])
     .nice()
     .range([height - margin.bottom, margin.top]);
+
+  const visiblePrices = visibleCandles.flatMap(candle => [
+    candle.low,
+    candle.high,
+  ]);
+  const minVisible = visiblePrices.length ? Math.min(...visiblePrices) : 0;
+  const maxVisible = visiblePrices.length ? Math.max(...visiblePrices) : 1;
+  const visibleRangePx = Math.abs(y(minVisible) - y(maxVisible));
 
   // Draw Y axis bar (right)
   const yAxisBar = new Graphics();
@@ -493,7 +513,7 @@ function renderChart(
     yCtx.fillStyle = grad;
     yCtx.fillRect(0, 0, 1, 100);
     yAxisBar.beginTextureFill({
-      texture: Texture.from(yCanvas) as any,
+      texture: textureFromCanvas(yCanvas),
     });
     yAxisBar.drawRoundedRect(
       width - margin.right,
@@ -575,7 +595,7 @@ function renderChart(
     xCtx.fillStyle = grad;
     xCtx.fillRect(0, 0, 200, 1);
     xAxisBar.beginTextureFill({
-      texture: Texture.from(xCanvas) as any,
+      texture: textureFromCanvas(xCanvas),
     });
     xAxisBar.drawRoundedRect(
       margin.left,
@@ -606,7 +626,9 @@ function renderChart(
   // Only use valid (non-null) visibleDomain values for ticks
   const validTicks = visibleDomain
     .map((ts, i) => (ts ? { ts, i } : null))
-    .filter(Boolean) as { ts: number; i: number }[];
+    .filter(
+      (entry): entry is { ts: QuoteCandle['ts']; i: number } => entry !== null,
+    );
   const xTickStep = Math.max(1, Math.floor(validTicks.length / xTickCount));
   for (let t = 0; t < validTicks.length; t += xTickStep) {
     const { ts, i } = validTicks[t];
@@ -666,7 +688,7 @@ function renderChart(
         padding: 4,
       }),
     );
-    label.anchor = { x: 0.5, y: 0 } as any;
+    label.anchor.set(0.5, 0);
     label.x = xPos + x.bandwidth() / 2;
     label.y = height - margin.bottom + 12;
     app.stage.addChild(label);
@@ -681,17 +703,9 @@ function renderChart(
     const candleWidth = x.bandwidth();
     const color = d.close >= d.open ? 0x4caf50 : 0xf44336;
 
-    // Calculate visible price range for current window (only valid data)
-    const visiblePrices = visibleData
-      .filter((datum): datum is { low: number; high: number } => !!datum)
-      .map(datum => [datum.low, datum.high])
-      .flat();
-    const minVisible = Math.min(...visiblePrices);
-    const maxVisible = Math.max(...visiblePrices);
-    const visibleRange = Math.abs(y(minVisible) - y(maxVisible));
     // Set a minimum candle height as a fraction of visible range
     const minCandleFrac = 0.04; // 4% of visible range
-    const minCandleHeight = Math.max(2, visibleRange * minCandleFrac);
+    const minCandleHeight = Math.max(2, visibleRangePx * minCandleFrac);
 
     // Wick
     const wick = new Graphics();

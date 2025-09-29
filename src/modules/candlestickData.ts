@@ -9,11 +9,13 @@ export async function prependOlderCandles(
   if (loading || !data.length || fetchInProgress) return;
   fetchInProgress = true;
   try {
-    let earliest = data[0].ts;
-    let to = new Date(earliest);
-    let interval = (TIMEFRAME_MAP[timeframe] || '1D') as
+    const earliest = data[0].ts;
+    const to = new Date(earliest);
+    const interval = (TIMEFRAME_MAP[timeframe] || '1D') as
       | '1M'
       | '5M'
+      | '15M'
+      | '30M'
       | '1H'
       | '1D';
     // Estimate days to fetch based on interval and requiredCandleCount
@@ -31,10 +33,10 @@ export async function prependOlderCandles(
       daysPerCandle = 1;
     }
     // Only fetch as many days as needed for the user's leftward movement (with a small buffer)
-    let windowDays = Math.ceil(
+    const windowDays = Math.ceil(
       requiredCandleCount * daysPerCandle * multiplier,
     ); // dynamic buffer
-    let from = new Date(to);
+    const from = new Date(to);
     from.setDate(to.getDate() - windowDays);
     const fetchKey = `${underlying}|${interval}|${from
       .toISOString()
@@ -73,6 +75,8 @@ import type { QuoteCandle } from '../api/historicalQuotes';
 const TIMEFRAME_MAP: Record<string, string> = {
   '1m': '1M',
   '5m': '5M',
+  '15m': '15M',
+  '30m': '30M',
   '1h': '1H',
   '1d': '1D',
 };
@@ -96,6 +100,8 @@ export async function loadCandlestickData() {
     const interval = (TIMEFRAME_MAP[timeframe] || '1D') as
       | '1M'
       | '5M'
+      | '15M'
+      | '30M'
       | '1H'
       | '1D';
     const resp = await fetchHistoricalCandleData(underlying, {
