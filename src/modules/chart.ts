@@ -2,7 +2,6 @@
 import { Application } from '@pixi/app';
 import { Graphics } from '@pixi/graphics';
 import { Text, TextStyle } from '@pixi/text';
-import { Texture } from '@pixi/core';
 import { DropShadowFilter } from '@pixi/filter-drop-shadow';
 import * as d3 from 'd3';
 import { subscribe, getState, setState } from './store';
@@ -16,15 +15,19 @@ let crosshair = {
   candleIdx: null as number | null,
 };
 
+type VisibleCenter = {
+  idx: number;
+  centerX: number;
+  left: number;
+  right: number;
+};
+
+let currentVisibleCenters: VisibleCenter[] = [];
+
 // Shared chart dimensions and margin (module scope)
 const width = window.innerWidth;
 const height = window.innerHeight;
 const margin = { left: 20, right: 70, top: 20, bottom: 50 };
-
-const textureFromCanvas = (
-  canvas: HTMLCanvasElement,
-): ReturnType<typeof Texture.from> =>
-  Texture.from(canvas) as unknown as Texture;
 
 // Exported function to initialize the chart
 export function initChart(container: HTMLElement) {
@@ -252,24 +255,37 @@ export function initChart(container: HTMLElement) {
     const rect = (app.view as HTMLCanvasElement).getBoundingClientRect();
     const mouseX = event.clientX - rect.left;
     const mouseY = event.clientY - rect.top;
-    // use shared margin
-    // Find the nearest candle index (center of band)
     const state = getState();
     const data = state.data || [];
-    if (data.length > 0) {
-      const windowSizeLocal = windowSize;
-      const windowStartLocal = windowStart;
-      const chartWidth =
-        (app.view as HTMLCanvasElement).width - margin.left - margin.right;
-      const xBand = chartWidth / windowSizeLocal;
-      let idx = Math.round((mouseX - margin.left) / xBand + windowStartLocal);
-      // Clamp idx to visible range
-      if (idx < 0) idx = 0;
-      if (idx >= data.length) idx = data.length - 1;
-      // Find x pixel for center of this candle
-      const xCandle = margin.left + (idx - windowStartLocal + 0.5) * xBand;
-      crosshair = { x: xCandle, y: mouseY, candleIdx: idx };
-      triggerRender();
+    const chartLeft = margin.left;
+    const chartRight = width - margin.right;
+    if (
+      data.length > 0 &&
+      currentVisibleCenters.length > 0 &&
+      mouseX >= chartLeft - 10 &&
+      mouseX <= chartRight + 10
+    ) {
+      let nearest: VisibleCenter | null = null;
+      let nearestDist = Number.POSITIVE_INFINITY;
+      for (const center of currentVisibleCenters) {
+        const dist = Math.abs(center.centerX - mouseX);
+        if (dist < nearestDist) {
+          nearest = center;
+          nearestDist = dist;
+        }
+      }
+      if (nearest) {
+        const clampedY = Math.max(
+          margin.top,
+          Math.min(mouseY, height - margin.bottom),
+        );
+        crosshair = {
+          x: nearest.centerX,
+          y: clampedY,
+          candleIdx: Math.max(0, Math.min(data.length - 1, nearest.idx)),
+        };
+        triggerRender();
+      }
     }
     // Hide crosshair on mouse up outside chart
     // crosshair.x = crosshair.y = crosshair.candleIdx = null;
@@ -294,105 +310,11 @@ function renderChart(
 ) {
   if (!app) return;
   app.stage.removeChildren();
-  // ...existing chart drawing code...
-
-  // ...existing chart drawing code...
-
-  // Draw crosshair (dotted lines) and OHLC if crosshair is active (must be after all chart variables are defined)
-  if (
+  currentVisibleCenters = [];
+  const crosshairActive =
     typeof crosshair.x === 'number' &&
     typeof crosshair.y === 'number' &&
-    typeof crosshair.candleIdx === 'number'
-  ) {
-    // Dotted vertical line (x, center of candle)
-    const vLine = new Graphics();
-    vLine.lineStyle({ width: 1, color: 0x888888, alpha: 0.7 });
-    for (let yPos = margin.top; yPos < height - margin.bottom; yPos += 6) {
-      vLine.moveTo(crosshair.x, yPos);
-      vLine.lineTo(crosshair.x, yPos + 3);
-    }
-    app.stage.addChild(vLine);
-    // Dotted horizontal line (y)
-    const hLine = new Graphics();
-    hLine.lineStyle({ width: 1, color: 0x888888, alpha: 0.7 });
-    for (let xPos = margin.left; xPos < width - margin.right; xPos += 6) {
-      hLine.moveTo(xPos, crosshair.y);
-      hLine.lineTo(xPos + 3, crosshair.y);
-    }
-    app.stage.addChild(hLine);
-    // Draw OHLC box at top (like TradingView)
-    const d = state.data?.[crosshair.candleIdx];
-    if (d) {
-      const ohlcStr = `O ${d.open}  H ${d.high}  L ${d.low}  C ${d.close}`;
-      const ohlcText = new Text(
-        ohlcStr,
-        new TextStyle({
-          fill: 0xffffff,
-          fontSize: 14,
-          fontWeight: 'bold',
-          fontFamily: 'Inter, Segoe UI, Arial, sans-serif',
-          dropShadow: true,
-          dropShadowColor: '#000',
-          dropShadowBlur: 4,
-          dropShadowAlpha: 0.4,
-          letterSpacing: 1.2,
-          padding: 4,
-        }),
-      );
-      ohlcText.x = margin.left + 10;
-      ohlcText.y = margin.top - 10;
-      app.stage.addChild(ohlcText);
-    }
-  }
-
-  if (
-    typeof crosshair.x === 'number' &&
-    typeof crosshair.y === 'number' &&
-    typeof crosshair.candleIdx === 'number'
-  ) {
-    // Dotted vertical line (x, center of candle)
-    const vLine = new Graphics();
-    vLine.lineStyle({ width: 1, color: 0x888888, alpha: 0.7 });
-    for (let yPos = margin.top; yPos < height - margin.bottom; yPos += 6) {
-      vLine.moveTo(crosshair.x, yPos);
-      vLine.lineTo(crosshair.x, yPos + 3);
-    }
-    app.stage.addChild(vLine);
-    // Dotted horizontal line (y)
-    const hLine = new Graphics();
-    hLine.lineStyle({ width: 1, color: 0x888888, alpha: 0.7 });
-    for (let xPos = margin.left; xPos < width - margin.right; xPos += 6) {
-      hLine.moveTo(xPos, crosshair.y);
-      hLine.lineTo(xPos + 3, crosshair.y);
-    }
-    app.stage.addChild(hLine);
-    // Draw OHLC box at top (like TradingView)
-    const d = state.data?.[crosshair.candleIdx];
-    if (d) {
-      const ohlcStr = `O ${d.open}  H ${d.high}  L ${d.low}  C ${d.close}`;
-      const ohlcText = new Text(
-        ohlcStr,
-        new TextStyle({
-          fill: 0xffffff,
-          fontSize: 14,
-          fontWeight: 'bold',
-          fontFamily: 'Inter, Segoe UI, Arial, sans-serif',
-          dropShadow: true,
-          dropShadowColor: '#000',
-          dropShadowBlur: 4,
-          dropShadowAlpha: 0.4,
-          letterSpacing: 1.2,
-          padding: 4,
-        }),
-      );
-      ohlcText.x = margin.left + 10;
-      ohlcText.y = margin.top - 10;
-      app.stage.addChild(ohlcText);
-    }
-  }
-  if (!app) return;
-  app.stage.removeChildren();
-  // width, height, and margin declared here only
+    typeof crosshair.candleIdx === 'number';
 
   if (state.loading) {
     const loadingText = new Text(
@@ -492,49 +414,25 @@ function renderChart(
 
   // Draw Y axis bar (right)
   const yAxisBar = new Graphics();
-  yAxisBar.beginFill(0x23272f);
-  yAxisBar.drawRect(
+  yAxisBar.beginFill(0x23272f, 0.98);
+  yAxisBar.drawRoundedRect(
     width - margin.right,
     margin.top,
     margin.right,
     height - margin.top - margin.bottom,
+    12,
   );
   yAxisBar.endFill();
+  yAxisBar.filters = [
+    new DropShadowFilter({
+      color: 0x000000,
+      alpha: 0.25,
+      blur: 6,
+      distance: 2,
+      rotation: 90,
+    }),
+  ];
   app.stage.addChild(yAxisBar);
-  // Draw Y axis bar (right) with rounded corners and gradient
-  const yCanvas = document.createElement('canvas');
-  yCanvas.width = 1;
-  yCanvas.height = 100;
-  const yCtx = yCanvas.getContext('2d');
-  if (yCtx) {
-    const grad = yCtx.createLinearGradient(0, 0, 0, 100);
-    grad.addColorStop(0, '#23272f');
-    grad.addColorStop(1, '#181a20');
-    yCtx.fillStyle = grad;
-    yCtx.fillRect(0, 0, 1, 100);
-    yAxisBar.beginTextureFill({
-      texture: textureFromCanvas(yCanvas),
-    });
-    yAxisBar.drawRoundedRect(
-      width - margin.right,
-      margin.top,
-      margin.right,
-      height - margin.top - margin.bottom,
-      12,
-    );
-    yAxisBar.endFill();
-    yAxisBar.alpha = 0.98;
-    yAxisBar.filters = [
-      new DropShadowFilter({
-        color: 0x000000,
-        alpha: 0.3,
-        blur: 6,
-        distance: 2,
-        rotation: 90,
-      }),
-    ];
-    app.stage.addChild(yAxisBar);
-  }
   // Draw Y axis (price) labels
   // Calculate number of Y ticks based on available space (min 30px per label)
   const yTickCount = Math.max(
@@ -574,49 +472,25 @@ function renderChart(
 
   // Draw X axis bar (bottom)
   const xAxisBar = new Graphics();
-  xAxisBar.beginFill(0x23272f);
-  xAxisBar.drawRect(
+  xAxisBar.beginFill(0x23272f, 0.98);
+  xAxisBar.drawRoundedRect(
     margin.left,
     height - margin.bottom,
     width - margin.left - margin.right,
     margin.bottom,
+    12,
   );
   xAxisBar.endFill();
+  xAxisBar.filters = [
+    new DropShadowFilter({
+      color: 0x000000,
+      alpha: 0.25,
+      blur: 6,
+      distance: 2,
+      rotation: 270,
+    }),
+  ];
   app.stage.addChild(xAxisBar);
-  // Draw X axis bar (bottom) with rounded corners and gradient
-  const xCanvas = document.createElement('canvas');
-  xCanvas.width = 200;
-  xCanvas.height = 1;
-  const xCtx = xCanvas.getContext('2d');
-  if (xCtx) {
-    const grad = xCtx.createLinearGradient(0, 0, 200, 0);
-    grad.addColorStop(0, '#23272f');
-    grad.addColorStop(1, '#181a20');
-    xCtx.fillStyle = grad;
-    xCtx.fillRect(0, 0, 200, 1);
-    xAxisBar.beginTextureFill({
-      texture: textureFromCanvas(xCanvas),
-    });
-    xAxisBar.drawRoundedRect(
-      margin.left,
-      height - margin.bottom,
-      width - margin.left - margin.right,
-      margin.bottom,
-      12,
-    );
-    xAxisBar.endFill();
-    xAxisBar.alpha = 0.98;
-    xAxisBar.filters = [
-      new DropShadowFilter({
-        color: 0x000000,
-        alpha: 0.3,
-        blur: 6,
-        distance: 2,
-        rotation: 270,
-      }),
-    ];
-    app.stage.addChild(xAxisBar);
-  }
   // Draw X axis (date) labels
   // Calculate number of X ticks based on available space (min 80px per label)
   const xTickCount = Math.max(
@@ -702,6 +576,7 @@ function renderChart(
     if (xPos === undefined) return;
     const candleWidth = x.bandwidth();
     const color = d.close >= d.open ? 0x4caf50 : 0xf44336;
+    const actualIdx = startIdx + i;
 
     // Set a minimum candle height as a fraction of visible range
     const minCandleFrac = 0.04; // 4% of visible range
@@ -734,6 +609,13 @@ function renderChart(
       .drawRect(xPos, bodyY, candleWidth, bodyHeight)
       .endFill();
     app.stage.addChild(body);
+
+    currentVisibleCenters.push({
+      idx: actualIdx,
+      centerX: xPos + candleWidth / 2,
+      left: xPos,
+      right: xPos + candleWidth,
+    });
   });
   // Draw user shapes (trendlines, hlines)
   [...(state.shapes || []), ...(state.drawing ? [state.drawing] : [])].forEach(
@@ -754,4 +636,46 @@ function renderChart(
       }
     },
   );
+
+  // Draw crosshair last so it sits atop all geometry
+  if (crosshairActive) {
+    const vLine = new Graphics();
+    vLine.lineStyle({ width: 1, color: 0x888888, alpha: 0.7 });
+    for (let yPos = margin.top; yPos < height - margin.bottom; yPos += 6) {
+      vLine.moveTo(crosshair.x as number, yPos);
+      vLine.lineTo(crosshair.x as number, yPos + 3);
+    }
+    app.stage.addChild(vLine);
+
+    const hLine = new Graphics();
+    hLine.lineStyle({ width: 1, color: 0x888888, alpha: 0.7 });
+    for (let xPos = margin.left; xPos < width - margin.right; xPos += 6) {
+      hLine.moveTo(xPos, crosshair.y as number);
+      hLine.lineTo(xPos + 3, crosshair.y as number);
+    }
+    app.stage.addChild(hLine);
+
+    const d = state.data?.[crosshair.candleIdx as number];
+    if (d) {
+      const ohlcStr = `O ${d.open}  H ${d.high}  L ${d.low}  C ${d.close}`;
+      const ohlcText = new Text(
+        ohlcStr,
+        new TextStyle({
+          fill: 0xffffff,
+          fontSize: 14,
+          fontWeight: 'bold',
+          fontFamily: 'Inter, Segoe UI, Arial, sans-serif',
+          dropShadow: true,
+          dropShadowColor: '#000',
+          dropShadowBlur: 4,
+          dropShadowAlpha: 0.4,
+          letterSpacing: 1.2,
+          padding: 4,
+        }),
+      );
+      ohlcText.x = margin.left + 10;
+      ohlcText.y = margin.top - 10;
+      app.stage.addChild(ohlcText);
+    }
+  }
 }
