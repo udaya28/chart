@@ -14,7 +14,7 @@ const listeners: Array<(state: State) => void> = [];
 
 let state: State = {
   underlying: 'NIFTY',
-  timeframe: '1m',
+  timeframe: '1d',
   loading: false,
   error: null,
   data: [],
