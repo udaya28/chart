@@ -3,7 +3,8 @@ import { Application } from '@pixi/app';
 import { Graphics } from '@pixi/graphics';
 import { Text, TextStyle } from '@pixi/text';
 import { DropShadowFilter } from '@pixi/filter-drop-shadow';
-import * as d3 from 'd3';
+import { scaleBand, scaleLinear } from 'd3-scale';
+import { min, max } from 'd3-array';
 import { subscribe, getState } from './store';
 import type { QuoteCandle } from '../api/historicalQuotes';
 
@@ -386,8 +387,7 @@ function renderChart(
   );
   currentPriceBottom = priceBottom;
 
-  const x = d3
-    .scaleBand()
+  const x = scaleBand<string>()
     .domain(visibleDomain.map((_, i) => i.toString()))
     .range([margin.left, width - margin.right])
     .padding(0.3);
@@ -396,12 +396,17 @@ function renderChart(
   const visibleCandles = visibleData.filter(
     (d): d is QuoteCandle => d !== undefined,
   );
-  const y = d3
-    .scaleLinear()
-    .domain([
-      visibleCandles.length > 0 ? d3.min(visibleCandles, d => d.low) ?? 0 : 0,
-      visibleCandles.length > 0 ? d3.max(visibleCandles, d => d.high) ?? 1 : 1,
-    ])
+  const lowestLow =
+    visibleCandles.length > 0
+      ? min(visibleCandles, (candle: QuoteCandle) => candle.low) ?? 0
+      : 0;
+  const highestHigh =
+    visibleCandles.length > 0
+      ? max(visibleCandles, (candle: QuoteCandle) => candle.high) ?? 1
+      : 1;
+
+  const y = scaleLinear()
+    .domain([lowestLow, highestHigh])
     .nice()
     .range([priceBottom, margin.top]);
 
@@ -441,7 +446,7 @@ function renderChart(
     Math.floor((height - margin.top - margin.bottom) / 50),
   );
   const yTicks = y.ticks(yTickCount);
-  yTicks.forEach(price => {
+  yTicks.forEach((price: number) => {
     const yPos = y(price);
     // Draw grid line
     const grid = new Graphics();
@@ -804,7 +809,7 @@ function renderChart(
   if (crosshairActive) {
     const vLine = new Graphics();
     vLine.lineStyle({ width: 1, color: 0x888888, alpha: 0.7 });
-    for (let yPos = margin.top; yPos < height - margin.bottom; yPos += 6) {
+    for (let yPos = margin.top; yPos < currentPriceBottom; yPos += 6) {
       vLine.moveTo(crosshair.x as number, yPos);
       vLine.lineTo(crosshair.x as number, yPos + 3);
     }
@@ -812,9 +817,10 @@ function renderChart(
 
     const hLine = new Graphics();
     hLine.lineStyle({ width: 1, color: 0x888888, alpha: 0.7 });
+    const crosshairY = Math.min(currentPriceBottom, crosshair.y as number);
     for (let xPos = margin.left; xPos < width - margin.right; xPos += 6) {
-      hLine.moveTo(xPos, crosshair.y as number);
-      hLine.lineTo(xPos + 3, crosshair.y as number);
+      hLine.moveTo(xPos, crosshairY);
+      hLine.lineTo(xPos + 3, crosshairY);
     }
     app.stage.addChild(hLine);
 

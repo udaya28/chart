@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@types/d3-array": "^3.0.4",
+    "@types/d3-scale": "^3.3.3",
     "typescript": "~5.8.3",
     "vite": "npm:rolldown-vite@7.1.12"
   },
@@ -26,8 +28,7 @@
     "@pixi/graphics": "^7.4.3",
     "@pixi/text": "^7.4.3",
     "@pixi/utils": "^7.4.3",
-    "@types/d3": "^7.4.3",
-    "d3": "^7.9.0",
-    "pixi.js": "^8.13.2"
+    "d3-array": "^3.2.4",
+    "d3-scale": "^4.0.2"
   }
 }

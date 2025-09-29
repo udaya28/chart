@@ -1,13 +1,21 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  server: {
-    proxy: {
-      '/api': {
-        target: 'https://oxide.stage3.sensibull.com',
-        changeOrigin: true,
-        rewrite: path => path.replace(/^\/api/, ''),
+  build: {
+    target: 'es2018',
+    rollupOptions: {
+      treeshake: {
+        propertyReadSideEffects: false,
       },
     },
+  },
+  optimizeDeps: {
+    include: [
+      '@pixi/app',
+      '@pixi/graphics',
+      '@pixi/text',
+      'd3-array',
+      'd3-scale',
+    ],
   },
 });
