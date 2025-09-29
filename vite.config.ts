@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  base: '/chart/',
   build: {
     target: 'es2018',
     rollupOptions: {
