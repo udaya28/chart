@@ -28,6 +28,71 @@ const width = window.innerWidth;
 const height = window.innerHeight;
 const margin = { left: 20, right: 70, top: 20, bottom: 50 };
 
+const SMA_PERIOD = 20;
+let cachedSmaSource: QuoteCandle[] | null = null;
+let cachedSmaValues: Array<number | null> = [];
+
+type Point = { x: number; y: number };
+
+function drawSmoothCurve(
+  graphics: Graphics,
+  points: Point[],
+  smoothing = 0.75,
+) {
+  if (points.length === 0) return;
+  if (points.length === 1) {
+    graphics.moveTo(points[0].x, points[0].y);
+    graphics.lineTo(points[0].x, points[0].y);
+    return;
+  }
+
+  graphics.moveTo(points[0].x, points[0].y);
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const p0 = points[i - 1] ?? points[i];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2] ?? points[i + 1];
+
+    const cp1x = p1.x + ((p2.x - p0.x) * smoothing) / 6;
+    const cp1y = p1.y + ((p2.y - p0.y) * smoothing) / 6;
+    const cp2x = p2.x - ((p3.x - p1.x) * smoothing) / 6;
+    const cp2y = p2.y - ((p3.y - p1.y) * smoothing) / 6;
+
+    graphics.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+  }
+}
+
+function computeSma(data: QuoteCandle[], period: number): Array<number | null> {
+  if (!data.length) return [];
+  const result: Array<number | null> = new Array(data.length).fill(null);
+  if (period <= 1) {
+    data.forEach((candle, idx) => {
+      result[idx] = candle.close;
+    });
+    return result;
+  }
+  let rollingSum = 0;
+  for (let idx = 0; idx < data.length; idx += 1) {
+    rollingSum += data[idx].close;
+    if (idx >= period) {
+      rollingSum -= data[idx - period].close;
+    }
+    if (idx >= period - 1) {
+      result[idx] = rollingSum / period;
+    }
+  }
+  return result;
+}
+
+function getSmaValues(data: QuoteCandle[]): Array<number | null> {
+  if (cachedSmaSource === data) {
+    return cachedSmaValues;
+  }
+  cachedSmaValues = computeSma(data, SMA_PERIOD);
+  cachedSmaSource = data;
+  return cachedSmaValues;
+}
+
 // Exported function to initialize the chart
 export function initChart(container: HTMLElement) {
   let app: Application | null = null;
@@ -252,6 +317,7 @@ function renderChart(
 
   // Prepare data
   const data = state.data;
+  const movingAverage = getSmaValues(data);
   const domain = data.map(d => d.ts);
   // Allow windowStart to be negative (scroll beyond data)
   windowSize = Math.max(5, windowSize);
@@ -539,6 +605,85 @@ function renderChart(
       right: xPos + candleWidth,
     });
   });
+
+  if (movingAverage.length) {
+    type MaPoint = { defined: boolean; x: number; y: number };
+    const maPoints: MaPoint[] = visibleDomain.map((ts, i) => {
+      const actualIdx = startIdx + i;
+      if (!ts || actualIdx < 0 || actualIdx >= movingAverage.length) {
+        return { defined: false, x: 0, y: 0 };
+      }
+      const maValue = movingAverage[actualIdx];
+      const candle = visibleData[i];
+      if (maValue === null || maValue === undefined || !candle) {
+        return { defined: false, x: 0, y: 0 };
+      }
+      const xPos = x(i.toString());
+      if (xPos === undefined) {
+        return { defined: false, x: 0, y: 0 };
+      }
+      const centerX = xPos + x.bandwidth() / 2;
+      const yPos = y(maValue);
+      if (!Number.isFinite(yPos)) {
+        return { defined: false, x: 0, y: 0 };
+      }
+      return { defined: true, x: centerX, y: yPos };
+    });
+    if (maPoints.some(point => point.defined)) {
+      const segments: Point[][] = [];
+      let current: Point[] = [];
+      maPoints.forEach(point => {
+        if (!point.defined) {
+          if (current.length) {
+            segments.push(current);
+            current = [];
+          }
+          return;
+        }
+        current.push({ x: point.x, y: point.y });
+      });
+      if (current.length) {
+        segments.push(current);
+      }
+
+      segments.forEach(segment => {
+        if (segment.length < 2) return;
+        const maLine = new Graphics();
+        maLine.lineStyle({ width: 2, color: 0xffc107, alpha: 0.92 });
+        drawSmoothCurve(maLine, segment, 0.85);
+        app.stage.addChild(maLine);
+      });
+    }
+
+    let latestMaValue: number | null = null;
+    for (let idx = movingAverage.length - 1; idx >= 0; idx -= 1) {
+      const val = movingAverage[idx];
+      if (val !== null && val !== undefined && Number.isFinite(val)) {
+        latestMaValue = val;
+        break;
+      }
+    }
+    if (latestMaValue !== null) {
+      const maBadge = new Text(
+        `MA${SMA_PERIOD} ${latestMaValue.toFixed(2)}`,
+        new TextStyle({
+          fill: 0xffc107,
+          fontSize: 13,
+          fontWeight: 'bold',
+          fontFamily: 'Inter, Segoe UI, Arial, sans-serif',
+          dropShadow: true,
+          dropShadowColor: '#000',
+          dropShadowBlur: 4,
+          dropShadowAlpha: 0.4,
+          letterSpacing: 1,
+          padding: 4,
+        }),
+      );
+      maBadge.x = margin.left + 12;
+      maBadge.y = margin.top + 12;
+      app.stage.addChild(maBadge);
+    }
+  }
   // Draw crosshair last so it sits atop all geometry
   if (crosshairActive) {
     const vLine = new Graphics();
@@ -559,7 +704,14 @@ function renderChart(
 
     const d = state.data?.[crosshair.candleIdx as number];
     if (d) {
-      const ohlcStr = `O ${d.open}  H ${d.high}  L ${d.low}  C ${d.close}`;
+      const idx = crosshair.candleIdx as number;
+      const maValue =
+        idx >= 0 && idx < movingAverage.length ? movingAverage[idx] : null;
+      const maInfo =
+        maValue !== null && maValue !== undefined
+          ? `  MA${SMA_PERIOD} ${maValue.toFixed(2)}`
+          : '';
+      const ohlcStr = `O ${d.open}  H ${d.high}  L ${d.low}  C ${d.close}${maInfo}`;
       const ohlcText = new Text(
         ohlcStr,
         new TextStyle({
